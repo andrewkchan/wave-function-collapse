@@ -1,0 +1,16 @@
+#output-container > div {
+  margin: 15px 0px;
+}
+
+#output-canvas {
+  background-color: black;
+  width: 512px;
+  height: 512px;
+  image-rendering: pixelated;
+}
+
+#input-img {
+  width: 128px;
+  height: 128px;
+  image-rendering: pixelated;
+}

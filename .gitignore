@@ -1,0 +1,26 @@
+index.d.ts
+index.d.ts.map
+
+# vscode
+.vscode/
+
+# Code Coverage Files
+*.js.map
+.nycrc
+.nyc_output
+
+# JetBrains IDE
+.idea
+scopes
+
+# OSX
+.DS_Store
+
+# NPM
+node_modules
+
+# TSC
+dist/
+
+# test outputs
+test/

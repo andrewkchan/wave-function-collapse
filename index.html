@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, minimum-scale=1.0, initial-scale=1.0, user-scalable=yes">
+  <title>Wave Function Collapse</title>
+  <link href="./style.css" rel="stylesheet">
+</head>
+<body>
+  <header>
+    <h1>Wave function collapse</h1>
+    <p>
+      An interactive demo of Maxim Gumin's wave function collapse algorithm for procedural bitmap generation.
+      Select a preset bitmap using the dropdown, upload one, or create your own.
+    </p>
+    <h2>Input</h2>
+    <div>
+      <img id="input-img" src="./Water.png" />
+    </div>
+  </header>
+  <div id="output-container">
+    <h2>Output</h2>
+    <div id="output-control">
+      <button id="generate">Generate</button>
+    </div>
+    <div id="output-view">
+      <canvas id="output-canvas" width="32px" height="32px">Your browser does not support the canvas tag.</canvas>
+    </div>
+  </div>
+  <script src="index.js"></script>
+</body>
+</html>
