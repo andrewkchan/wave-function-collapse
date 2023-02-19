@@ -9,7 +9,9 @@
   image-rendering: pixelated;
 }
 
-#input-img {
+#input-canvas {
+  margin: 15px 0px;
+  background-color: black;
   width: 128px;
   height: 128px;
   image-rendering: pixelated;

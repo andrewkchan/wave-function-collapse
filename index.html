@@ -15,7 +15,15 @@
     </p>
     <h2>Input</h2>
     <div>
-      <img id="input-img" src="./Water.png" />
+      <select id="input-select">
+        <option value="">Select preset...</option>
+        <option value="./flowers.bmp">Flowers</option>
+        <option value="./Water.png">Water</option>
+      </select>
+      <input type="file" id="input-file" accept="image/*" />
+      <div>
+        <canvas id="input-canvas">Your browser does not support the canvas tag.</canvas>
+      </div>
     </div>
   </header>
   <div id="output-container">

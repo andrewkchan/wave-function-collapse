@@ -1,15 +1,11 @@
 import { SimplePixelModel } from "./model"
 
-const input = document.getElementById("input-img") as HTMLImageElement
-const outputCanvas = document.getElementById("output-canvas") as HTMLCanvasElement
+const inputCanvas = document.getElementById("input-canvas") as HTMLCanvasElement
 
 function generate() {
-  const canvas = document.createElement("canvas")
-  canvas.width = input.naturalWidth
-  canvas.height = input.naturalHeight
-  const inputCtx = canvas.getContext("2d")!
-  inputCtx.drawImage(input, 0, 0)
-  const imageData = inputCtx.getImageData(0, 0, canvas.width, canvas.height)
+  const outputCanvas = document.getElementById("output-canvas") as HTMLCanvasElement
+  const inputCtx = inputCanvas.getContext("2d")!
+  const imageData = inputCtx.getImageData(0, 0, inputCanvas.width, inputCanvas.height)
 
   const model = new SimplePixelModel(imageData, outputCanvas.width, outputCanvas.height, true)
   let success = model.generate()
@@ -34,4 +30,32 @@ function generate() {
 const generateButton = document.getElementById("generate")
 generateButton?.addEventListener("click", (e) => {
   generate()
+})
+const inputFile = document.getElementById("input-file") as HTMLInputElement
+inputFile?.addEventListener("change", (e) => {
+  if (inputFile.files && inputFile.files.length > 0) {
+    const file = inputFile.files[0]
+    const img = new Image()
+    img.src = URL.createObjectURL(file)
+    img.onload = () => {
+      inputCanvas.width = img.naturalWidth
+      inputCanvas.height = img.naturalHeight
+      const ctx = inputCanvas.getContext("2d")
+      ctx?.drawImage(img, 0, 0)
+    }
+  }
+})
+const inputSelect = document.getElementById("input-select")
+inputSelect?.addEventListener("change", (e) => {
+  const value = (e?.target as any)?.value
+  if (value) {
+    const img = new Image()
+    img.src = value
+    img.onload = () => {
+      inputCanvas.width = img.naturalWidth
+      inputCanvas.height = img.naturalHeight
+      const ctx = inputCanvas.getContext("2d")
+      ctx?.drawImage(img, 0, 0)
+    }
+  }
 })

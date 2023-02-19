@@ -358,15 +358,11 @@
   }
 
   // index.ts
-  var input = document.getElementById("input-img");
-  var outputCanvas = document.getElementById("output-canvas");
+  var inputCanvas = document.getElementById("input-canvas");
   function generate() {
-    const canvas = document.createElement("canvas");
-    canvas.width = input.naturalWidth;
-    canvas.height = input.naturalHeight;
-    const inputCtx = canvas.getContext("2d");
-    inputCtx.drawImage(input, 0, 0);
-    const imageData = inputCtx.getImageData(0, 0, canvas.width, canvas.height);
+    const outputCanvas = document.getElementById("output-canvas");
+    const inputCtx = inputCanvas.getContext("2d");
+    const imageData = inputCtx.getImageData(0, 0, inputCanvas.width, inputCanvas.height);
     const model = new SimplePixelModel(imageData, outputCanvas.width, outputCanvas.height, true);
     let success = model.generate();
     const MAX_RETRIES = 10;
@@ -388,6 +384,35 @@
   var generateButton = document.getElementById("generate");
   generateButton == null ? void 0 : generateButton.addEventListener("click", (e) => {
     generate();
+  });
+  var inputFile = document.getElementById("input-file");
+  inputFile == null ? void 0 : inputFile.addEventListener("change", (e) => {
+    if (inputFile.files && inputFile.files.length > 0) {
+      const file = inputFile.files[0];
+      const img = new Image();
+      img.src = URL.createObjectURL(file);
+      img.onload = () => {
+        inputCanvas.width = img.naturalWidth;
+        inputCanvas.height = img.naturalHeight;
+        const ctx = inputCanvas.getContext("2d");
+        ctx == null ? void 0 : ctx.drawImage(img, 0, 0);
+      };
+    }
+  });
+  var inputSelect = document.getElementById("input-select");
+  inputSelect == null ? void 0 : inputSelect.addEventListener("change", (e) => {
+    var _a;
+    const value = (_a = e == null ? void 0 : e.target) == null ? void 0 : _a.value;
+    if (value) {
+      const img = new Image();
+      img.src = value;
+      img.onload = () => {
+        inputCanvas.width = img.naturalWidth;
+        inputCanvas.height = img.naturalHeight;
+        const ctx = inputCanvas.getContext("2d");
+        ctx == null ? void 0 : ctx.drawImage(img, 0, 0);
+      };
+    }
   });
 })();
 //# sourceMappingURL=index.js.map
