@@ -4,28 +4,122 @@ enum IterationResult {
   ONGOING
 }
 
-enum Dir {
-  RIGHT,
-  DOWN,
-  LEFT,
-  UP
+type DirectionID = number
+interface Basis {
+  // Gives the number of directions that this basis defines.
+  // If the number of directions is N, then this basis
+  // defines a direction for every integer from 0 (inclusive)
+  // until N (exclusive). These integers are the `DirectionID`s.
+  //
+  // The direction vectors can be accessed using the `vector`
+  // method for every direction ID vector(0)... vector(N).
+  readonly numDirections: number
+  vector(i: DirectionID): number[]
+  opposite(i: DirectionID): DirectionID
 }
 
-const DirVectors: Record<Dir, number[]> = {
-  [Dir.RIGHT]: [1, 0],
-  [Dir.DOWN]: [0, 1],
-  [Dir.LEFT]: [-1, 0],
-  [Dir.UP]: [0, -1],
+export const CardinalBasis: Basis = {
+  numDirections: 4,
+  vector: (i) => {
+    switch (i) {
+      case 0: {
+        return [1, 0]
+      }
+      case 1: {
+        return [0, 1]
+      }
+      case 2: {
+        return [-1, 0]
+      }
+      case 3: {
+        return [0, -1]
+      }
+    }
+    throw new Error(`Unhandled direction ${i} for cardinal basis`)
+  },
+  opposite: (i) => {
+    switch (i) {
+      case 0: {
+        return 2 as DirectionID
+      }
+      case 1: {
+        return 3 as DirectionID
+      }
+      case 2: {
+        return 0 as DirectionID
+      }
+      case 3: {
+        return 1 as DirectionID
+      }
+    }
+    throw new Error(`Unhandled direction ${i} for cardinal basis`)
+  }
 }
-const Opposite: Record<Dir, Dir> = {
-  [Dir.RIGHT]: Dir.LEFT,
-  [Dir.DOWN]: Dir.UP,
-  [Dir.LEFT]: Dir.RIGHT,
-  [Dir.UP]: Dir.DOWN,
+
+export const CardinalBasisWithDiagonals: Basis = {
+  numDirections: 8,
+  vector: (i) => {
+    switch (i) {
+      case 0: {
+        return [1, 0]
+      }
+      case 1: {
+        return [0, 1]
+      }
+      case 2: {
+        return [-1, 0]
+      }
+      case 3: {
+        return [0, -1]
+      }
+      case 4: {
+        return [1, 1]
+      }
+      case 5: {
+        return [1, -1]
+      }
+      case 6: {
+        return [-1, -1]
+      }
+      case 7: {
+        return [-1, 1]
+      }
+    }
+    throw new Error(`Unhandled direction ${i} for cardinal basis`)
+  },
+  opposite: (i) => {
+    switch (i) {
+      case 0: {
+        return 2 as DirectionID
+      }
+      case 1: {
+        return 3 as DirectionID
+      }
+      case 2: {
+        return 0 as DirectionID
+      }
+      case 3: {
+        return 1 as DirectionID
+      }
+      case 4: {
+        return 6 as DirectionID
+      }
+      case 5: {
+        return 7 as DirectionID
+      }
+      case 6: {
+        return 4 as DirectionID
+      }
+      case 7: {
+        return 5 as DirectionID
+      }
+    }
+    throw new Error(`Unhandled direction ${i} for cardinal basis with diagonals`)
+  }
 }
 
 type Color = number
-type ColorMap = Map<Color, Record<Dir, Color[]>>
+type ColorMap = Map<Color, Map<DirectionID, Color[]>>
 
 type PixelState = boolean[]
 
@@ -37,6 +131,7 @@ export class SimplePixelModel {
   private _FMXxFMY: number
 
   private _isPeriodic: boolean
+  private _basis: Basis
 
   // Array with dimensions of the output, each element represents the state
   // of a pixel in the output. Each state is a superposition of colors of the
@@ -44,13 +139,13 @@ export class SimplePixelModel {
   // `true` means the color is not yet forbidden.
   private _wave: PixelState[] | null
 
-  // Directed graph of sourceColor --(direction)--> targetColor.
+  // Directed graph of sourceColor --(direction)--> [list of possible targetColors].
   private _propagator: ColorMap
   // Stores a map of (possible color --(direction)--> number of neighbor edges allowing that color) for every generation cell.
   // Neighbor edges are deleted as we observe neighbor colors + collapse neighbor states. When the number of neighbor
   // edges compatible with a given color reach zero for any direction, that color is no longer possible for the
   // generation cell.
-  private _compatible: (Map<Color, Record<Dir, number>>)[]
+  private _compatible: (Map<Color, Map<DirectionID, number>>)[]
   // Number of possible colors.
   private _numColors: number
   // Map of color IDs to color objects
@@ -75,14 +170,16 @@ export class SimplePixelModel {
   // width - Width of the generation
   // height - Height of the generation
   // isPeriodic - Whether the source image is considered a periodic pattern
-  constructor(imageData: ImageData, width: number, height: number, isPeriodic: boolean) {
+  // basis - A Basis object providing the constraining edges for each cell.
+  constructor(imageData: ImageData, width: number, height: number, isPeriodic: boolean, basis: Basis) {
     this._FMX = width
     this._FMY = height
     this._FMXxFMY = width * height
 
     this._isPeriodic = isPeriodic
+    this._basis = basis
 
-    const hexMap = new Map<Color, Record<Dir, Set<Color>>>()
+    const hexMap = new Map<Color, Map<DirectionID, Set<Color>>>()
     const hexCount = new Map<Color, number>()
     for (let i = 0; i < imageData.height; i++) {
       for (let j = 0; j < imageData.width; j++) {
@@ -96,17 +193,12 @@ export class SimplePixelModel {
         }
         hexCount.set(hex, hexCount.get(hex)! + 1)
         if (!hexMap.has(hex)) {
-          hexMap.set(hex, {
-            [Dir.RIGHT]: new Set(),
-            [Dir.DOWN]: new Set(),
-            [Dir.LEFT]: new Set(),
-            [Dir.UP]: new Set(),
-          })
+          hexMap.set(hex, new Map())
         }
         const dirMap = hexMap.get(hex)!
-        for (let d = Dir.RIGHT; d <= Dir.UP; d++) {
-          let ii = i + DirVectors[d][1]
-          let jj = j + DirVectors[d][0]
+        for (let d = 0; d < this._basis.numDirections; d++) {
+          let ii = i + this._basis.vector(d)[1]
+          let jj = j + this._basis.vector(d)[0]
           if (ii < 0 || ii >= imageData.height) {
             if (this._isPeriodic) {
               ii = (imageData.height + ii) % imageData.height
@@ -127,7 +219,10 @@ export class SimplePixelModel {
           const nA = imageData.data[ii*4*imageData.width + jj*4 + 3]
           const nHex = nR | (nG << 8) | (nB << 16) | (nA << 24)
 
-          dirMap[d].add(nHex)
+          if (!dirMap.has(d)) {
+            dirMap.set(d, new Set())
+          }
+          dirMap.get(d)!.add(nHex)
         }
       }
     }
@@ -145,11 +240,9 @@ export class SimplePixelModel {
     })
     this._propagator = new Map()
     hexMap.forEach((dirMapHex, hex) => {
-      const dirMapIDs: Record<Dir, Color[]> = {
-        [Dir.RIGHT]: Array.from(dirMapHex[Dir.RIGHT].values()).map<number>((nHex) => hexToID.get(nHex)!),
-        [Dir.DOWN]: Array.from(dirMapHex[Dir.DOWN].values()).map<number>((nHex) => hexToID.get(nHex)!),
-        [Dir.LEFT]: Array.from(dirMapHex[Dir.LEFT].values()).map<number>((nHex) => hexToID.get(nHex)!),
-        [Dir.UP]: Array.from(dirMapHex[Dir.UP].values()).map<number>((nHex) => hexToID.get(nHex)!),
+      const dirMapIDs: Map<DirectionID, Color[]> = new Map()
+      for (let d = 0; d < this._basis.numDirections; d++) {
+        dirMapIDs.set(d, Array.from(dirMapHex.get(d)!.values()).map<number>((nHex) => hexToID.get(nHex)!))
       }
       this._propagator.set(hexToID.get(hex)!, dirMapIDs)
     })
@@ -177,12 +270,11 @@ export class SimplePixelModel {
       this._wave[i] = new Array(this._numColors)
       this._compatible[i] = new Map()
       for (let t = 0; t < this._numColors; t++) {
-        this._compatible[i].set(t, {
-          [Dir.RIGHT]: 0,
-          [Dir.DOWN]: 0,
-          [Dir.LEFT]: 0,
-          [Dir.UP]: 0
-        })
+        const dirCount: Map<DirectionID, number> = new Map()
+        for (let d = 0; d < this._basis.numDirections; d++) {
+          dirCount.set(d, 0)
+        }
+        this._compatible[i].set(t, dirCount)
       }
     }
 
@@ -262,12 +354,15 @@ export class SimplePixelModel {
         // Re-initialize the constraint edge graph `_compatible`.
         // Every cell in `_compatible` is reset to have all possible neighbor
         // colors in every direction.
-        for (let d = Dir.RIGHT; d <= Dir.UP; d++) {
+        const compatDirMap = this._compatible[i].get(t)! // Map of directionID -> refcount of incoming edges
+        for (let d = 0; d < this._basis.numDirections; d++) {
           // TODO: original WFC implementation seems to do something different to initialize `compatible`?
           for (let t2 = 0; t2 < this._numColors; t2++) {
-            this._propagator.get(t2)![Opposite[d]].forEach(color => {
+            const t2DirMap = this._propagator.get(t2)! // Map of directionID -> [list of possible colors]
+            t2DirMap.get(this._basis.opposite(d))?.forEach(color => {
               if (color === t) {
-                this._compatible[i].get(t)![d]++
+                const compatCount = compatDirMap.get(d)!
+                compatDirMap.set(d, compatCount + 1)
               }
             })
           }
@@ -359,9 +454,9 @@ export class SimplePixelModel {
       const x1 = i1 % this._FMX
       const y1 = (i1 / this._FMX) | 0
 
-      for (let d = Dir.RIGHT; d <= Dir.UP; d++) {
-        const dx = DirVectors[d][0]
-        const dy = DirVectors[d][1]
+      for (let d = 0; d < this._basis.numDirections; d++) {
+        const dx = this._basis.vector(d)[0]
+        const dy = this._basis.vector(d)[1]
 
         let x2 = x1 + dx
         let y2 = y1 + dy
@@ -386,11 +481,12 @@ export class SimplePixelModel {
         // ban possible colors for this neighbor that now have zero compatibilities
         const i2 = x2 + y2 * this._FMX
         const compatibleColors = this._compatible[i2]
-        const targetColorsForDir = this._propagator.get(e1.color)![d]
-        targetColorsForDir.forEach(t2 => {
-          const compatibleNeighborEdges = compatibleColors.get(t2)
-          compatibleNeighborEdges![d]--
-          if (compatibleNeighborEdges![d] <= 0) {
+        const targetColorsForDir = this._propagator.get(e1.color)!.get(d)
+        targetColorsForDir?.forEach(t2 => {
+          const compatibleNeighborEdges = compatibleColors.get(t2)!
+          const compatCount = compatibleNeighborEdges.get(d)!
+          compatibleNeighborEdges.set(d, compatCount - 1)
+          if (compatibleNeighborEdges.get(d)! <= 0) {
             this._ban(i2, t2)
           }
         })

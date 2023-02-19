@@ -1,13 +1,17 @@
-import { SimplePixelModel } from "./model"
+import { SimplePixelModel, CardinalBasis, CardinalBasisWithDiagonals } from "./model"
 
 const inputCanvas = document.getElementById("input-canvas") as HTMLCanvasElement
+const outputBasis = document.getElementById("output-control-basis") as HTMLSelectElement
+
+let outputBasisName = outputBasis.value
 
 function generate() {
   const outputCanvas = document.getElementById("output-canvas") as HTMLCanvasElement
   const inputCtx = inputCanvas.getContext("2d")!
   const imageData = inputCtx.getImageData(0, 0, inputCanvas.width, inputCanvas.height)
 
-  const model = new SimplePixelModel(imageData, outputCanvas.width, outputCanvas.height, true)
+  const modelBasis = outputBasisName === "cardinal" ? CardinalBasis : CardinalBasisWithDiagonals
+  const model = new SimplePixelModel(imageData, outputCanvas.width, outputCanvas.height, true, modelBasis)
   let success = model.generate()
   const MAX_RETRIES = 10
   if (!success) {
@@ -30,6 +34,9 @@ function generate() {
 const generateButton = document.getElementById("generate")
 generateButton?.addEventListener("click", (e) => {
   generate()
+})
+outputBasis.addEventListener("change", (e) => {
+  outputBasisName = (e?.target as any)?.value
 })
 const inputFile = document.getElementById("input-file") as HTMLInputElement
 inputFile?.addEventListener("change", (e) => {

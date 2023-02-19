@@ -6,29 +6,117 @@
     IterationResult2[IterationResult2["ONGOING"] = 2] = "ONGOING";
     return IterationResult2;
   })(IterationResult || {});
-  var DirVectors = {
-    [0 /* RIGHT */]: [1, 0],
-    [1 /* DOWN */]: [0, 1],
-    [2 /* LEFT */]: [-1, 0],
-    [3 /* UP */]: [0, -1]
+  var CardinalBasis = {
+    numDirections: 4,
+    vector: (i) => {
+      switch (i) {
+        case 0: {
+          return [1, 0];
+        }
+        case 1: {
+          return [0, 1];
+        }
+        case 2: {
+          return [-1, 0];
+        }
+        case 3: {
+          return [0, -1];
+        }
+      }
+      throw new Error(`Unhandled direction ${i} for cardinal basis`);
+    },
+    opposite: (i) => {
+      switch (i) {
+        case 0: {
+          return 2;
+        }
+        case 1: {
+          return 3;
+        }
+        case 2: {
+          return 0;
+        }
+        case 3: {
+          return 1;
+        }
+      }
+      throw new Error(`Unhandled direction ${i} for cardinal basis`);
+    }
   };
-  var Opposite = {
-    [0 /* RIGHT */]: 2 /* LEFT */,
-    [1 /* DOWN */]: 3 /* UP */,
-    [2 /* LEFT */]: 0 /* RIGHT */,
-    [3 /* UP */]: 1 /* DOWN */
+  var CardinalBasisWithDiagonals = {
+    numDirections: 8,
+    vector: (i) => {
+      switch (i) {
+        case 0: {
+          return [1, 0];
+        }
+        case 1: {
+          return [0, 1];
+        }
+        case 2: {
+          return [-1, 0];
+        }
+        case 3: {
+          return [0, -1];
+        }
+        case 4: {
+          return [1, 1];
+        }
+        case 5: {
+          return [1, -1];
+        }
+        case 6: {
+          return [-1, -1];
+        }
+        case 7: {
+          return [-1, 1];
+        }
+      }
+      throw new Error(`Unhandled direction ${i} for cardinal basis`);
+    },
+    opposite: (i) => {
+      switch (i) {
+        case 0: {
+          return 2;
+        }
+        case 1: {
+          return 3;
+        }
+        case 2: {
+          return 0;
+        }
+        case 3: {
+          return 1;
+        }
+        case 4: {
+          return 6;
+        }
+        case 5: {
+          return 7;
+        }
+        case 6: {
+          return 4;
+        }
+        case 7: {
+          return 5;
+        }
+      }
+      throw new Error(`Unhandled direction ${i} for cardinal basis with diagonals`);
+    }
   };
   var SimplePixelModel = class {
     // imageData - Pixels to use as source image
     // width - Width of the generation
     // height - Height of the generation
     // isPeriodic - Whether the source image is considered a periodic pattern
-    constructor(imageData, width, height, isPeriodic) {
+    // basis - A Basis object providing the constraining edges for each cell.
+    constructor(imageData, width, height, isPeriodic, basis) {
       this._generationComplete = false;
       this._FMX = width;
       this._FMY = height;
       this._FMXxFMY = width * height;
       this._isPeriodic = isPeriodic;
+      this._basis = basis;
       const hexMap = /* @__PURE__ */ new Map();
       const hexCount = /* @__PURE__ */ new Map();
       for (let i = 0; i < imageData.height; i++) {
@@ -43,17 +131,12 @@
           }
           hexCount.set(hex, hexCount.get(hex) + 1);
           if (!hexMap.has(hex)) {
-            hexMap.set(hex, {
-              [0 /* RIGHT */]: /* @__PURE__ */ new Set(),
-              [1 /* DOWN */]: /* @__PURE__ */ new Set(),
-              [2 /* LEFT */]: /* @__PURE__ */ new Set(),
-              [3 /* UP */]: /* @__PURE__ */ new Set()
-            });
+            hexMap.set(hex, /* @__PURE__ */ new Map());
           }
           const dirMap = hexMap.get(hex);
-          for (let d = 0 /* RIGHT */; d <= 3 /* UP */; d++) {
-            let ii = i + DirVectors[d][1];
-            let jj = j + DirVectors[d][0];
+          for (let d = 0; d < this._basis.numDirections; d++) {
+            let ii = i + this._basis.vector(d)[1];
+            let jj = j + this._basis.vector(d)[0];
             if (ii < 0 || ii >= imageData.height) {
               if (this._isPeriodic) {
                 ii = (imageData.height + ii) % imageData.height;
@@ -73,7 +156,10 @@
             const nB = imageData.data[ii * 4 * imageData.width + jj * 4 + 2];
             const nA = imageData.data[ii * 4 * imageData.width + jj * 4 + 3];
             const nHex = nR | nG << 8 | nB << 16 | nA << 24;
-            dirMap[d].add(nHex);
+            if (!dirMap.has(d)) {
+              dirMap.set(d, /* @__PURE__ */ new Set());
+            }
+            dirMap.get(d).add(nHex);
           }
         }
       }
@@ -91,12 +177,10 @@
       });
       this._propagator = /* @__PURE__ */ new Map();
       hexMap.forEach((dirMapHex, hex) => {
-        const dirMapIDs = {
-          [0 /* RIGHT */]: Array.from(dirMapHex[0 /* RIGHT */].values()).map((nHex) => hexToID.get(nHex)),
-          [1 /* DOWN */]: Array.from(dirMapHex[1 /* DOWN */].values()).map((nHex) => hexToID.get(nHex)),
-          [2 /* LEFT */]: Array.from(dirMapHex[2 /* LEFT */].values()).map((nHex) => hexToID.get(nHex)),
-          [3 /* UP */]: Array.from(dirMapHex[3 /* UP */].values()).map((nHex) => hexToID.get(nHex))
-        };
+        const dirMapIDs = /* @__PURE__ */ new Map();
+        for (let d = 0; d < this._basis.numDirections; d++) {
+          dirMapIDs.set(d, Array.from(dirMapHex.get(d).values()).map((nHex) => hexToID.get(nHex)));
+        }
         this._propagator.set(hexToID.get(hex), dirMapIDs);
       });
       this._numColors = this._propagator.size;
@@ -116,12 +200,11 @@
         this._wave[i] = new Array(this._numColors);
         this._compatible[i] = /* @__PURE__ */ new Map();
         for (let t = 0; t < this._numColors; t++) {
-          this._compatible[i].set(t, {
-            [0 /* RIGHT */]: 0,
-            [1 /* DOWN */]: 0,
-            [2 /* LEFT */]: 0,
-            [3 /* UP */]: 0
-          });
+          const dirCount = /* @__PURE__ */ new Map();
+          for (let d = 0; d < this._basis.numDirections; d++) {
+            dirCount.set(d, 0);
+          }
+          this._compatible[i].set(t, dirCount);
         }
       }
       this._startingEntropy = 0;
@@ -187,14 +270,18 @@
       return this._generationComplete;
     }
     clear() {
+      var _a;
       for (let i = 0; i < this._FMXxFMY; i++) {
         for (let t = 0; t < this._numColors; t++) {
           this._wave[i][t] = true;
-          for (let d = 0 /* RIGHT */; d <= 3 /* UP */; d++) {
+          const compatDirMap = this._compatible[i].get(t);
+          for (let d = 0; d < this._basis.numDirections; d++) {
             for (let t2 = 0; t2 < this._numColors; t2++) {
-              this._propagator.get(t2)[Opposite[d]].forEach((color) => {
+              const t2DirMap = this._propagator.get(t2);
+              (_a = t2DirMap.get(this._basis.opposite(d))) == null ? void 0 : _a.forEach((color) => {
                 if (color === t) {
-                  this._compatible[i].get(t)[d]++;
+                  const compatCount = compatDirMap.get(d);
+                  compatDirMap.set(d, compatCount + 1);
                 }
               });
             }
@@ -267,9 +354,9 @@
         const i1 = e1.cellIndex;
         const x1 = i1 % this._FMX;
         const y1 = i1 / this._FMX | 0;
-        for (let d = 0 /* RIGHT */; d <= 3 /* UP */; d++) {
-          const dx = DirVectors[d][0];
-          const dy = DirVectors[d][1];
+        for (let d = 0; d < this._basis.numDirections; d++) {
+          const dx = this._basis.vector(d)[0];
+          const dy = this._basis.vector(d)[1];
           let x2 = x1 + dx;
           let y2 = y1 + dy;
           if (this._onBoundary(x2, y2)) {
@@ -287,11 +374,12 @@
           }
           const i2 = x2 + y2 * this._FMX;
           const compatibleColors = this._compatible[i2];
-          const targetColorsForDir = this._propagator.get(e1.color)[d];
-          targetColorsForDir.forEach((t2) => {
+          const targetColorsForDir = this._propagator.get(e1.color).get(d);
+          targetColorsForDir == null ? void 0 : targetColorsForDir.forEach((t2) => {
             const compatibleNeighborEdges = compatibleColors.get(t2);
-            compatibleNeighborEdges[d]--;
-            if (compatibleNeighborEdges[d] <= 0) {
+            const compatCount = compatibleNeighborEdges.get(d);
+            compatibleNeighborEdges.set(d, compatCount - 1);
+            if (compatibleNeighborEdges.get(d) <= 0) {
               this._ban(i2, t2);
             }
           });
@@ -359,11 +447,14 @@
 
   // index.ts
   var inputCanvas = document.getElementById("input-canvas");
+  var outputBasis = document.getElementById("output-control-basis");
+  var outputBasisName = outputBasis.value;
   function generate() {
     const outputCanvas = document.getElementById("output-canvas");
     const inputCtx = inputCanvas.getContext("2d");
     const imageData = inputCtx.getImageData(0, 0, inputCanvas.width, inputCanvas.height);
-    const model = new SimplePixelModel(imageData, outputCanvas.width, outputCanvas.height, true);
+    const modelBasis = outputBasisName === "cardinal" ? CardinalBasis : CardinalBasisWithDiagonals;
+    const model = new SimplePixelModel(imageData, outputCanvas.width, outputCanvas.height, true, modelBasis);
     let success = model.generate();
     const MAX_RETRIES = 10;
     if (!success) {
@@ -384,6 +475,10 @@
   var generateButton = document.getElementById("generate");
   generateButton == null ? void 0 : generateButton.addEventListener("click", (e) => {
     generate();
+  });
+  outputBasis.addEventListener("change", (e) => {
+    var _a;
+    outputBasisName = (_a = e == null ? void 0 : e.target) == null ? void 0 : _a.value;
   });
   var inputFile = document.getElementById("input-file");
   inputFile == null ? void 0 : inputFile.addEventListener("change", (e) => {
