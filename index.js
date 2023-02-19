@@ -394,6 +394,9 @@
       img.onload = () => {
         inputCanvas.width = img.naturalWidth;
         inputCanvas.height = img.naturalHeight;
+        const aspect = img.naturalWidth / img.naturalHeight;
+        inputCanvas.style.width = `${aspect * 128}px`;
+        inputCanvas.style.height = `128px`;
         const ctx = inputCanvas.getContext("2d");
         ctx == null ? void 0 : ctx.drawImage(img, 0, 0);
       };
@@ -409,6 +412,9 @@
       img.onload = () => {
         inputCanvas.width = img.naturalWidth;
         inputCanvas.height = img.naturalHeight;
+        const aspect = img.naturalWidth / img.naturalHeight;
+        inputCanvas.style.width = `${aspect * 128}px`;
+        inputCanvas.style.height = `128px`;
         const ctx = inputCanvas.getContext("2d");
         ctx == null ? void 0 : ctx.drawImage(img, 0, 0);
       };

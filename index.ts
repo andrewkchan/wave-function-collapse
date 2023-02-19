@@ -40,6 +40,9 @@ inputFile?.addEventListener("change", (e) => {
     img.onload = () => {
       inputCanvas.width = img.naturalWidth
       inputCanvas.height = img.naturalHeight
+      const aspect = img.naturalWidth / img.naturalHeight
+      inputCanvas.style.width = `${aspect * 128}px`
+      inputCanvas.style.height = `128px`
       const ctx = inputCanvas.getContext("2d")
       ctx?.drawImage(img, 0, 0)
     }
@@ -54,6 +57,9 @@ inputSelect?.addEventListener("change", (e) => {
     img.onload = () => {
       inputCanvas.width = img.naturalWidth
       inputCanvas.height = img.naturalHeight
+      const aspect = img.naturalWidth / img.naturalHeight
+      inputCanvas.style.width = `${aspect * 128}px`
+      inputCanvas.style.height = `128px`
       const ctx = inputCanvas.getContext("2d")
       ctx?.drawImage(img, 0, 0)
     }
