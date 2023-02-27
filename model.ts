@@ -118,8 +118,9 @@ export const CardinalBasisWithDiagonals: Basis = {
   }
 }
 
-type Color = number
-type ColorMap = Map<Color, Map<DirectionID, Color[]>>
+type ColorHex = number
+type ColorID = number
+type ColorMap = Map<ColorID, Map<DirectionID, ColorID[]>>
 
 type PixelState = boolean[]
 
@@ -145,7 +146,7 @@ export class SimplePixelModel {
   // Neighbor edges are deleted as we observe neighbor colors + collapse neighbor states. When the number of neighbor
   // edges compatible with a given color reach zero for any direction, that color is no longer possible for the
   // generation cell.
-  private _compatible: (Map<Color, Map<DirectionID, number>>)[]
+  private _compatible: (Map<ColorID, Map<DirectionID, number>>)[]
   // Number of possible colors.
   private _numColors: number
   // Map of color IDs to color objects
@@ -179,8 +180,8 @@ export class SimplePixelModel {
     this._isPeriodic = isPeriodic
     this._basis = basis
 
-    const hexMap = new Map<Color, Map<DirectionID, Set<Color>>>()
-    const hexCount = new Map<Color, number>()
+    const hexMap = new Map<ColorHex, Map<DirectionID, Set<ColorHex>>>()
+    const hexCount = new Map<ColorHex, number>()
     for (let i = 0; i < imageData.height; i++) {
       for (let j = 0; j < imageData.width; j++) {
         const r = imageData.data[i*4*imageData.width + j*4 + 0]
@@ -240,7 +241,7 @@ export class SimplePixelModel {
     })
     this._propagator = new Map()
     hexMap.forEach((dirMapHex, hex) => {
-      const dirMapIDs: Map<DirectionID, Color[]> = new Map()
+      const dirMapIDs: Map<DirectionID, ColorID[]> = new Map()
       for (let d = 0; d < this._basis.numDirections; d++) {
         dirMapIDs.set(d, Array.from(dirMapHex.get(d)!.values()).map<number>((nHex) => hexToID.get(nHex)!))
       }
@@ -532,7 +533,6 @@ export class SimplePixelModel {
     })
     return n
   }
-
 }
 
 // Sample an index from a discrete probability distribution.
