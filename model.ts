@@ -121,6 +121,7 @@ export const CardinalBasisWithDiagonals: Basis = {
 type ColorHex = number
 type ColorID = number
 type ColorMap = Map<ColorID, Map<DirectionID, ColorID[]>>
+type Color = {r: number, g: number, b: number, a: number}
 
 type PixelState = boolean[]
 
@@ -150,7 +151,7 @@ export class SimplePixelModel {
   // Number of possible colors.
   private _numColors: number
   // Map of color IDs to color objects
-  private _colorRGBA: Map<number, {r: number, g: number, b: number, a: number}>
+  private _colorRGBA: Map<number, Color>
 
   // WlogW for the given color with weight W, 1 per color
   private _weightLogWeights: number[]
@@ -253,7 +254,8 @@ export class SimplePixelModel {
     // allowing multiple tiles to be specified using a single tile entry with
     // symmetry and rotation labels. In SimplePixelModel, tiles are pixels
     // and therefore are already unique up to reflection and rotation.
-    // Input data are also given as a directed graph.
+    // Input data are also given as a source image rather than a tileset
+    // with explicit edges.
     this._weights = []
     for (let t = 0; t < this._numColors; t++) {
       const rgba = this._colorRGBA.get(t)!
@@ -535,6 +537,14 @@ export class SimplePixelModel {
   }
 }
 
+interface TileData {
+  // NxN array of RGBA pixels
+  data: Color[]
+}
+
+type TileID = number
+type TileMap = Map<TileID, Map<DirectionID, TileID[]>>
+
 export class NonOverlappingTileModel {
   private _generationComplete: boolean = false
 
@@ -546,48 +556,52 @@ export class NonOverlappingTileModel {
   private _basis: Basis
 
   // Array with dimensions of the output, each element represents the state
-  // of a pixel in the output. Each state is a superposition of colors of the
-  // input with boolean coefficients. `false` means the color is forbidden,
-  // `true` means the color is not yet forbidden.
+  // of a tile in the output. Each state is a superposition of tiles of the
+  // input with boolean coefficients. `false` means the tile is forbidden,
+  // `true` means the tile is not yet forbidden.
   private _wave: PixelState[] | null
 
-  // Directed graph of sourceColor --(direction)--> [list of possible targetColors].
-  private _propagator: ColorMap
-  // Stores a map of (possible color --(direction)--> number of neighbor edges allowing that color) for every generation cell.
-  // Neighbor edges are deleted as we observe neighbor colors + collapse neighbor states. When the number of neighbor
-  // edges compatible with a given color reach zero for any direction, that color is no longer possible for the
+  // Directed graph of sourceTile --(direction)--> [list of possible target tiles].
+  private _propagator: TileMap
+  // Stores a map of (possible tile --(direction)--> number of neighbor edges allowing that tile) for every generation cell.
+  // Neighbor edges are deleted as we observe neighbor tiles + collapse neighbor states. When the number of neighbor
+  // edges compatible with a given tile reach zero for any direction, that tile is no longer possible for the
   // generation cell.
-  private _compatible: (Map<ColorID, Map<DirectionID, number>>)[]
-  // Number of possible colors.
-  private _numColors: number
-  // Map of color IDs to color objects
-  private _colorRGBA: Map<number, {r: number, g: number, b: number, a: number}>
+  private _compatible: (Map<TileID, Map<DirectionID, number>>)[]
+  // Number of possible tiles.
+  private _numTiles: number
+  // Length N of each NxN tile. All tiles in our tileset are size NxN, N>=1.
+  private _tileSize: number
+  // Map of tile IDs to tile data objects
+  private _tileSet: Map<number, TileData>
 
-  // WlogW for the given color with weight W, 1 per color
+  // WlogW for the given tile with weight W, 1 per tile
   private _weightLogWeights: number[]
-  // prior probabilities of colors, 1 per color
+  // prior probabilities of tiles, 1 per tile
   private _weights: number[]
   private _startingEntropy: number
   // entropies of generation cells, 1 per cell
   private _entropies: number[]
 
-  // Final observed colors, 1 per generation cell.
+  // Final observed tiles, 1 per generation cell.
   // Only set after generation completes.
   private _observed: number[]
 
-  // Stack of (cellIndex, color) pairs banned during iterations, used for backtracking and propagation
-  private _stack: {cellIndex: number; color: number}[]
+  // Stack of (cellIndex, tile) pairs banned during iterations, used for backtracking and propagation
+  private _stack: {cellIndex: number; tile: number}[]
 
   // imageData - Pixels to use as source image
   // width - Width of the generation
   // height - Height of the generation
+  // tileSize - Length N of each NxN square forming the basic unit of the generation
   // isPeriodic - Whether the source image is considered a periodic pattern
   // basis - A Basis object providing the constraining edges for each cell.
-  constructor(imageData: ImageData, width: number, height: number, isPeriodic: boolean, basis: Basis) {
+  constructor(imageData: ImageData, width: number, height: number, tileSize: number, isPeriodic: boolean, basis: Basis) {
     this._FMX = width
     this._FMY = height
     this._FMXxFMY = width * height
 
+    this._tileSize = tileSize
     this._isPeriodic = isPeriodic
     this._basis = basis
 
@@ -638,7 +652,7 @@ export class NonOverlappingTileModel {
         }
       }
     }
-    this._colorRGBA = new Map()
+    this._tileSet = new Map()
     const hexToID = new Map<number, number>()
     let colorID = 0
     hexMap.forEach((_, hex) => {
@@ -646,7 +660,10 @@ export class NonOverlappingTileModel {
       const g = (hex >> 8) & 0xFF
       const b = (hex >> 16) & 0xFF
       const a = (hex >> 24) & 0xFF
-      this._colorRGBA.set(colorID, {r, g, b, a})
+      // TODO: handle tileSize > 1
+      this._tileSet.set(colorID, {
+        data: [{r, g, b, a}]
+      })
       hexToID.set(hex, colorID)
       colorID++
     })
@@ -659,15 +676,11 @@ export class NonOverlappingTileModel {
       this._propagator.set(hexToID.get(hex)!, dirMapIDs)
     })
 
-    this._numColors = this._propagator.size
-    // In original WFC SimpleTiledModel, the input data is made much smaller by
-    // allowing multiple tiles to be specified using a single tile entry with
-    // symmetry and rotation labels. In SimplePixelModel, tiles are pixels
-    // and therefore are already unique up to reflection and rotation.
-    // Input data are also given as a directed graph.
+    this._numTiles = this._propagator.size
     this._weights = []
-    for (let t = 0; t < this._numColors; t++) {
-      const rgba = this._colorRGBA.get(t)!
+    for (let t = 0; t < this._numTiles; t++) {
+      // TODO: handle tileSize > 1
+      const rgba = this._tileSet.get(t)!.data[0]
       const hex = rgba.r | (rgba.g << 8) | (rgba.b << 16) | (rgba.a << 24)
       const count = hexCount.get(hex)!
       this._weights.push(count / this._FMXxFMY)
@@ -679,9 +692,9 @@ export class NonOverlappingTileModel {
     this._wave = new Array(this._FMXxFMY)
     this._compatible = new Array(this._FMXxFMY)
     for (let i = 0; i < this._FMXxFMY; i++) {
-      this._wave[i] = new Array(this._numColors)
+      this._wave[i] = new Array(this._numTiles)
       this._compatible[i] = new Map()
-      for (let t = 0; t < this._numColors; t++) {
+      for (let t = 0; t < this._numTiles; t++) {
         const dirCount: Map<DirectionID, number> = new Map()
         for (let d = 0; d < this._basis.numDirections; d++) {
           dirCount.set(d, 0)
@@ -691,8 +704,8 @@ export class NonOverlappingTileModel {
     }
 
     this._startingEntropy = 0
-    this._weightLogWeights = new Array(this._numColors)
-    for (let t = 0; t < this._numColors; t++) {
+    this._weightLogWeights = new Array(this._numTiles)
+    for (let t = 0; t < this._numTiles; t++) {
       this._weightLogWeights[t] = this._weights[t] * Math.log(this._weights[t])
       this._startingEntropy -= this._weightLogWeights[t]
     }
@@ -708,8 +721,9 @@ export class NonOverlappingTileModel {
       return
     }
     for (let i = 0; i < this._FMXxFMY; i++) {
-      const colorID = this._observed[i]
-      const rgba = this._colorRGBA.get(colorID)!
+      const tileID = this._observed[i]
+      // TODO: handle tileSize > 1
+      const rgba = this._tileSet.get(tileID)!.data[0]
       array[4*i + 0] = rgba.r;
       array[4*i + 1] = rgba.g;
       array[4*i + 2] = rgba.b;
@@ -760,19 +774,19 @@ export class NonOverlappingTileModel {
 
   clear() {
     for (let i = 0; i < this._FMXxFMY; i++) {
-      for (let t = 0; t < this._numColors; t++) {
+      for (let t = 0; t < this._numTiles; t++) {
         this._wave![i][t] = true
 
         // Re-initialize the constraint edge graph `_compatible`.
         // Every cell in `_compatible` is reset to have all possible neighbor
-        // colors in every direction.
+        // tiles in every direction.
         const compatDirMap = this._compatible[i].get(t)! // Map of directionID -> refcount of incoming edges
         for (let d = 0; d < this._basis.numDirections; d++) {
           // TODO: original WFC implementation seems to do something different to initialize `compatible`?
-          for (let t2 = 0; t2 < this._numColors; t2++) {
-            const t2DirMap = this._propagator.get(t2)! // Map of directionID -> [list of possible colors]
-            t2DirMap.get(this._basis.opposite(d))?.forEach(color => {
-              if (color === t) {
+          for (let t2 = 0; t2 < this._numTiles; t2++) {
+            const t2DirMap = this._propagator.get(t2)! // Map of directionID -> [list of possible tiles]
+            t2DirMap.get(this._basis.opposite(d))?.forEach(tile => {
+              if (tile === t) {
                 const compatCount = compatDirMap.get(d)!
                 compatDirMap.set(d, compatCount + 1)
               }
@@ -788,8 +802,8 @@ export class NonOverlappingTileModel {
   }
 
   // Find cell with minimum non-zero entropy and collapse its wavefunction by setting it
-  // to a single color. If no such cell exists, return IterationResult.END_SUCCESS.
-  // If we find a contradiction (a cell with no possible colors), return IterationResult.END_FAILURE.
+  // to a single tile. If no such cell exists, return IterationResult.END_SUCCESS.
+  // If we find a contradiction (a cell with no possible tiles), return IterationResult.END_FAILURE.
   // Else return IterationResult.ONGOING.
   private _observe(rng: () => number): IterationResult {
     let min = Infinity
@@ -829,7 +843,7 @@ export class NonOverlappingTileModel {
       this._observed = new Array(this._FMXxFMY)
 
       for (let i = 0; i < this._FMXxFMY; i++) {
-        for (let t = 0; t < this._numColors; t++) {
+        for (let t = 0; t < this._numTiles; t++) {
           if (this._wave![i][t]) {
             this._observed[i] = t
             break
@@ -840,16 +854,16 @@ export class NonOverlappingTileModel {
       return IterationResult.END_SUCCESS
     }
 
-    // 2. Collapse minimum cell wave function by sampling a color from its distribution
-    const distribution = new Array(this._numColors)
-    for (let t = 0; t < this._numColors; t++) {
+    // 2. Collapse minimum cell wave function by sampling a tile from its distribution
+    const distribution = new Array(this._numTiles)
+    for (let t = 0; t < this._numTiles; t++) {
       distribution[t] = this._wave![argmin][t] ? this._weights[t] : 0
     }
 
-    const colorIndex = sampleDiscrete(distribution, rng())
+    const tileIndex = sampleDiscrete(distribution, rng())
     const w = this._wave![argmin]
-    for (let t = 0; t < this._numColors; t++) {
-      if (w[t] !== (t === colorIndex)) {
+    for (let t = 0; t < this._numTiles; t++) {
+      if (w[t] !== (t === tileIndex)) {
         this._ban(argmin, t)
       }
     }
@@ -890,12 +904,12 @@ export class NonOverlappingTileModel {
           y2 -= this._FMY
         }
 
-        // ban possible colors for this neighbor that now have zero compatibilities
+        // ban possible tiles for this neighbor that now have zero compatibilities
         const i2 = x2 + y2 * this._FMX
-        const compatibleColors = this._compatible[i2]
-        const targetColorsForDir = this._propagator.get(e1.color)!.get(d)
-        targetColorsForDir?.forEach(t2 => {
-          const compatibleNeighborEdges = compatibleColors.get(t2)!
+        const compatibleTiles = this._compatible[i2]
+        const targetTilesForDir = this._propagator.get(e1.tile)!.get(d)
+        targetTilesForDir?.forEach(t2 => {
+          const compatibleNeighborEdges = compatibleTiles.get(t2)!
           const compatCount = compatibleNeighborEdges.get(d)!
           compatibleNeighborEdges.set(d, compatCount - 1)
           if (compatibleNeighborEdges.get(d)! <= 0) {
@@ -911,18 +925,18 @@ export class NonOverlappingTileModel {
     return !this._isPeriodic && (x < 0 || y < 0 || x >= this._FMX || y >= this._FMY)
   }
 
-  // Removes color with index `t` from the possible colors for generation cell `i`.
+  // Removes tile with index `t` from the possible tiles for generation cell `i`.
   private _ban(i: number, t: number) {
     if (this._wave![i][t] === false) {
       return
     }
     this._wave![i][t] = false
-    this._stack.push({cellIndex: i, color: t})
+    this._stack.push({cellIndex: i, tile: t})
 
     // TODO: avoid C calls to `ban` resulting in C^2 computations
     let entropy = 0
-    for (let c = 0; c < this._numColors; c++) {
-      if (this._wave![i][c]) {
+    for (let t = 0; t < this._numTiles; t++) {
+      if (this._wave![i][t]) {
         entropy -= this._weightLogWeights[i]
       }
     }
