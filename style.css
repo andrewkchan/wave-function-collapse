@@ -16,3 +16,7 @@
   height: 128px;
   image-rendering: pixelated;
 }
+
+.output-control {
+  padding: 2.5px 0px;
+}

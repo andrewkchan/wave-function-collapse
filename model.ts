@@ -538,13 +538,25 @@ export class SimplePixelModel {
 }
 
 interface TileData {
-  // NxN array of RGBA pixels
+  // NxN array of RGBA pixels.
+  // Pixels are stored in row-major order, e.g.
+  // `data[i*N + j]` returns the pixel `i` rows from the top and `j` columns from the left.
   data: Color[]
 }
 
 type TileID = number
 type TileMap = Map<TileID, Map<DirectionID, TileID[]>>
 
+// NonOverlappingTileModel
+//
+// This model interprets the input image as a grid of non-overlapping tiles where
+// each tile is a `tileWidth` x `tileWidth` square of pixels. The output is similarly
+// constrained so that an output tile can only have a neighboring tile in a given direction
+// if there also exists the same tile with the same neighbor in the same direction
+// in the input image.
+//
+// `SimplePixelModel` can be interpreted as equivalent to a `NonOverlappingTileModel` with a
+// `tileWidth` of 1.
 export class NonOverlappingTileModel {
   private _generationComplete: boolean = false
 
@@ -585,14 +597,14 @@ export class NonOverlappingTileModel {
 
   // Final observed tiles, 1 per generation cell.
   // Only set after generation completes.
-  private _observed: number[]
+  private _observed: TileID[]
 
   // Stack of (cellIndex, tile) pairs banned during iterations, used for backtracking and propagation
-  private _stack: {cellIndex: number; tile: number}[]
+  private _stack: {cellIndex: number; tile: TileID}[]
 
   // imageData - Pixels to use as source image
-  // width - Width of the generation
-  // height - Height of the generation
+  // width - Width (in tiles) of the generation
+  // height - Height (in tiles) of the generation
   // tileSize - Length N of each NxN square forming the basic unit of the generation
   // isPeriodic - Whether the source image is considered a periodic pattern
   // basis - A Basis object providing the constraining edges for each cell.
@@ -605,8 +617,9 @@ export class NonOverlappingTileModel {
     this._isPeriodic = isPeriodic
     this._basis = basis
 
-    const hexMap = new Map<ColorHex, Map<DirectionID, Set<ColorHex>>>()
-    const hexCount = new Map<ColorHex, number>()
+    // 1. Count number of unique colors in source image and assign each an ID
+    let nextColorID = 0
+    const hexToID = new Map<ColorHex, number>()
     for (let i = 0; i < imageData.height; i++) {
       for (let j = 0; j < imageData.width; j++) {
         const r = imageData.data[i*4*imageData.width + j*4 + 0]
@@ -614,17 +627,89 @@ export class NonOverlappingTileModel {
         const b = imageData.data[i*4*imageData.width + j*4 + 2]
         const a = imageData.data[i*4*imageData.width + j*4 + 3]
         const hex = r | (g << 8) | (b << 16) | (a << 24)
-        if (!hexCount.has(hex)) {
-          hexCount.set(hex, 0)
+        if (!hexToID.has(hex)) {
+          hexToID.set(hex, nextColorID++)
         }
-        hexCount.set(hex, hexCount.get(hex)! + 1)
-        if (!hexMap.has(hex)) {
-          hexMap.set(hex, new Map())
+      }
+    }
+    const numColors = hexToID.size
+    // 2. Get all unique tiles in source image, assign each an ID, and
+    // construct a directed graph of unique tile IDs to possible neighbor
+    // tile IDs
+    const hexArrayToHash = (colorArr: ColorHex[]): number  => {
+      // "Hash" each array of C colors by treating each color as a digit and computing the number.
+      let result = 0
+      for (let i = 0; i < colorArr.length; i++) {
+        const hex = colorArr[colorArr.length - 1 - i]
+        result += hexToID.get(hex)! * Math.pow(numColors, i)
+      }
+      return result
+    }
+    const tileHexDataAtPixelOffset = (i: number, j: number): ColorHex[] => {
+      // Get a 1-dimensional array of NxN hex colors corresponding to the NxN tile at
+      // pixel offset i,j in the source image.
+      const data = new Array(this._tileSize * this._tileSize)
+      let index = 0
+      for (let di = 0; di < this._tileSize; di++) {
+        for (let dj = 0; dj < this._tileSize; dj++) {
+          const ii = i + di
+          const jj = j + dj
+          const r = imageData.data[ii*4*imageData.width + jj*4 + 0]
+          const g = imageData.data[ii*4*imageData.width + jj*4 + 1]
+          const b = imageData.data[ii*4*imageData.width + jj*4 + 2]
+          const a = imageData.data[ii*4*imageData.width + jj*4 + 3]
+          const hex = r | (g << 8) | (b << 16) | (a << 24)
+          data[index] = hex
+          index++
         }
-        const dirMap = hexMap.get(hex)!
+      }
+      return data
+    }
+    const tileHexDataToTileData = (hexData: ColorHex[]): TileData => {
+      // TODO: We shouldn't need to do so much conversion between hex and RGBA format.
+      // Should be able to simplify this code a bunch if we make `_tileSet` use
+      // tile data with pixels in hex format.
+      return {
+        data: hexData.map<Color>(hex => {
+            return {
+            r: hex & 0xFF,
+            g: (hex >> 8) & 0xFF,
+            b: (hex >> 16) & 0xFF,
+            a: (hex >> 24) & 0xFF,
+          }
+        })
+      }
+    }
+    let nextTileID = 0
+    const tileHashToID = new Map<number, TileID>()
+    const tileIDToCount = new Map<TileID, number>()
+    this._tileSet = new Map()
+    this._propagator = new Map()
+
+    const getTileIDForHexData = (tileHexData: ColorHex[]): TileID => {
+      // If tile with the given hex data already exists, return its ID.
+      // Else insert it into tileset and give it a new tile ID.
+      const hash = hexArrayToHash(tileHexData)
+      if (!tileHashToID.has(hash)) {
+        const tileID = nextTileID++
+        tileHashToID.set(hash, tileID)
+        tileIDToCount.set(tileID, 0)
+        const tileData = tileHexDataToTileData(tileHexData)
+        this._tileSet.set(tileID, tileData)
+        this._propagator.set(tileID, new Map())
+      }
+      const tileID = tileHashToID.get(hash)!
+      return tileID
+    }
+
+    for (let i = 0; i < imageData.height; i += this._tileSize) {
+      for (let j = 0; j < imageData.width; j += this._tileSize) {
+        const tileHexData = tileHexDataAtPixelOffset(i, j)
+        const tileID = getTileIDForHexData(tileHexData)
+        const dirMap = this._propagator.get(tileID)!
         for (let d = 0; d < this._basis.numDirections; d++) {
-          let ii = i + this._basis.vector(d)[1]
-          let jj = j + this._basis.vector(d)[0]
+          let ii = i + this._basis.vector(d)[1] * this._tileSize
+          let jj = j + this._basis.vector(d)[0] * this._tileSize
           if (ii < 0 || ii >= imageData.height) {
             if (this._isPeriodic) {
               ii = (imageData.height + ii) % imageData.height
@@ -639,50 +724,24 @@ export class NonOverlappingTileModel {
               continue
             }
           }
-          const nR = imageData.data[ii*4*imageData.width + jj*4 + 0]
-          const nG = imageData.data[ii*4*imageData.width + jj*4 + 1]
-          const nB = imageData.data[ii*4*imageData.width + jj*4 + 2]
-          const nA = imageData.data[ii*4*imageData.width + jj*4 + 3]
-          const nHex = nR | (nG << 8) | (nB << 16) | (nA << 24)
+          const nTileID = getTileIDForHexData(tileHexDataAtPixelOffset(ii, jj))
+          tileIDToCount.set(nTileID, tileIDToCount.get(nTileID)! + 1)
 
           if (!dirMap.has(d)) {
-            dirMap.set(d, new Set())
+            dirMap.set(d, [])
           }
-          dirMap.get(d)!.add(nHex)
+          const neighborTileIDs = dirMap.get(d)!
+          if (neighborTileIDs.indexOf(nTileID) === -1) {
+            neighborTileIDs.push(nTileID)
+          }
         }
       }
     }
-    this._tileSet = new Map()
-    const hexToID = new Map<number, number>()
-    let colorID = 0
-    hexMap.forEach((_, hex) => {
-      const r = (hex >> 0) & 0xFF
-      const g = (hex >> 8) & 0xFF
-      const b = (hex >> 16) & 0xFF
-      const a = (hex >> 24) & 0xFF
-      // TODO: handle tileSize > 1
-      this._tileSet.set(colorID, {
-        data: [{r, g, b, a}]
-      })
-      hexToID.set(hex, colorID)
-      colorID++
-    })
-    this._propagator = new Map()
-    hexMap.forEach((dirMapHex, hex) => {
-      const dirMapIDs: Map<DirectionID, ColorID[]> = new Map()
-      for (let d = 0; d < this._basis.numDirections; d++) {
-        dirMapIDs.set(d, Array.from(dirMapHex.get(d)!.values()).map<number>((nHex) => hexToID.get(nHex)!))
-      }
-      this._propagator.set(hexToID.get(hex)!, dirMapIDs)
-    })
 
-    this._numTiles = this._propagator.size
+    this._numTiles = this._tileSet.size
     this._weights = []
     for (let t = 0; t < this._numTiles; t++) {
-      // TODO: handle tileSize > 1
-      const rgba = this._tileSet.get(t)!.data[0]
-      const hex = rgba.r | (rgba.g << 8) | (rgba.b << 16) | (rgba.a << 24)
-      const count = hexCount.get(hex)!
+      const count = tileIDToCount.get(t)!
       this._weights.push(count / this._FMXxFMY)
     }
   }
@@ -720,14 +779,42 @@ export class NonOverlappingTileModel {
       console.error("Cannot putGeneratedData when generation incomplete")
       return
     }
-    for (let i = 0; i < this._FMXxFMY; i++) {
-      const tileID = this._observed[i]
-      // TODO: handle tileSize > 1
-      const rgba = this._tileSet.get(tileID)!.data[0]
-      array[4*i + 0] = rgba.r;
-      array[4*i + 1] = rgba.g;
-      array[4*i + 2] = rgba.b;
-      array[4*i + 3] = rgba.a;
+    const N = this._tileSize
+    for (let index = 0; index < this._FMXxFMY; index++) {
+      const tileID = this._observed[index]
+      const data = this._tileSet.get(tileID)!.data
+      const i = (index / this._FMX) | 0
+      const j = index % this._FMX
+      for (let ii = 0; ii < N; ii++) {
+        for (let jj = 0; jj < N; jj++) {
+          //  FMX tiles, or FMX*N pixels
+          //  -------------------------
+          //
+          //  N=4 pixels
+          //  ----
+          // |+---+---+---+---+---+---+        |
+          // ||   |   |   |   |   |   |        |
+          // ||   |   |   |   |   |   |        |
+          // ||   |   |   |   |   |   |        |
+          //  +---+---+---+---+---+---+        | -> i=2 tile heights, 2*N*FMX pixels in row major order
+          //  |   |   |   |   |   |   |        |
+          //  |   |   |   |   |   |   |        |
+          //  |   |   |   |   |   |   |        |
+          //  +---+---XXXX+---+---+---+ -------*
+          //  |   |   XXXX|   |   |   |
+          //  |   |   XXXX|   |   |   |
+          //  |   |   XXXX|   |   |   |
+          //  +---+---+---+---+---+---+
+          //          ^
+          //  --------*
+          //  j=2 tile widths, or 2*N pixels offset from 2*N*FMX pixels in row major order
+          const rgba = data[ii*N + jj]
+          array[4*(i*this._FMX*N*N + j*N + ii*this._FMX*N + jj) + 0] = rgba.r;
+          array[4*(i*this._FMX*N*N + j*N + ii*this._FMX*N + jj) + 1] = rgba.g;
+          array[4*(i*this._FMX*N*N + j*N + ii*this._FMX*N + jj) + 2] = rgba.b;
+          array[4*(i*this._FMX*N*N + j*N + ii*this._FMX*N + jj) + 3] = rgba.a;
+        }
+      }
     }
   }
 
@@ -985,9 +1072,9 @@ function sampleDiscrete(weights: number[], r: number) {
   return 0
 }
 
-const DEBUG_LOG = false
+const DEBUG_LOG = true
 function debugLog(...args: any[]) {
   if (DEBUG_LOG) {
-    console.log(arguments)
+    console.log.apply(this, args)
   }
 }

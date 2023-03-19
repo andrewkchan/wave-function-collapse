@@ -1,9 +1,11 @@
-import { SimplePixelModel, CardinalBasis, CardinalBasisWithDiagonals } from "./model"
+import { SimplePixelModel, CardinalBasis, CardinalBasisWithDiagonals, NonOverlappingTileModel } from "./model"
 
 const inputCanvas = document.getElementById("input-canvas") as HTMLCanvasElement
 const outputBasis = document.getElementById("output-control-basis") as HTMLSelectElement
+const outputModel = document.getElementById("output-control-model") as HTMLSelectElement
 
 let outputBasisName = outputBasis.value
+let outputModelName = outputModel.value
 
 function generate() {
   const outputCanvas = document.getElementById("output-canvas") as HTMLCanvasElement
@@ -11,7 +13,14 @@ function generate() {
   const imageData = inputCtx.getImageData(0, 0, inputCanvas.width, inputCanvas.height)
 
   const modelBasis = outputBasisName === "cardinal" ? CardinalBasis : CardinalBasisWithDiagonals
-  const model = new SimplePixelModel(imageData, outputCanvas.width, outputCanvas.height, true, modelBasis)
+  const tileSize = 2
+  const isPeriodic = true
+  let model: any = null
+  if (outputModelName === "simple-pixel-model") {
+    model = new SimplePixelModel(imageData, outputCanvas.width, outputCanvas.height, true, modelBasis)
+  } else {
+    model = new NonOverlappingTileModel(imageData, outputCanvas.width / tileSize, outputCanvas.height / tileSize, tileSize, isPeriodic, modelBasis)
+  }
   let success = model.generate()
   const MAX_RETRIES = 10
   if (!success) {
@@ -37,6 +46,9 @@ generateButton?.addEventListener("click", (e) => {
 })
 outputBasis.addEventListener("change", (e) => {
   outputBasisName = (e?.target as any)?.value
+})
+outputModel.addEventListener("change", (e) => {
+  outputModelName = (e?.target as any)?.value
 })
 const inputFile = document.getElementById("input-file") as HTMLInputElement
 inputFile?.addEventListener("change", (e) => {

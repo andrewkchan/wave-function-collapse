@@ -85,11 +85,21 @@
   <div id="output-container">
     <h2>Output</h2>
     <div id="output-control">
-      <select id="output-control-basis">
-        <option value="cardinal">Cardinal basis</option>
-        <option value="cardinal-diagonal">Cardinal basis with diagonals</option>
-      </select>
-      <button id="generate">Generate</button>
+      <div class="output-control">
+        <select id="output-control-model">
+          <option value="non-overlapping-tile-model">Non-overlapping tile model</option>
+          <option value="simple-pixel-model">Simple pixel model</option>
+        </select>
+      </div>
+      <div class="output-control">
+        <select id="output-control-basis">
+          <option value="cardinal">Cardinal basis</option>
+          <option value="cardinal-diagonal">Cardinal basis with diagonals</option>
+        </select>
+      </div>
+      <div class="output-control">
+        <button id="generate">Generate</button>
+      </div>
     </div>
     <div id="output-view">
       <canvas id="output-canvas" width="32px" height="32px">Your browser does not support the canvas tag.</canvas>
