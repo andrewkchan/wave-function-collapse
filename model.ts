@@ -1047,6 +1047,496 @@ export class NonOverlappingTileModel {
   }
 }
 
+export class OverlappingTileModel {
+  private _generationComplete: boolean = false
+
+  private _FMX: number
+  private _FMY: number
+  private _FMXxFMY: number
+
+  private _isPeriodic: boolean
+  private _basis: Basis
+
+  // Array with dimensions of the output, each element represents the state
+  // of a tile in the output. Each state is a superposition of tiles of the
+  // input with boolean coefficients. `false` means the tile is forbidden,
+  // `true` means the tile is not yet forbidden.
+  private _wave: PixelState[] | null
+
+  // Directed graph of sourceTile --(direction)--> [list of possible target tiles].
+  private _propagator: TileMap
+  // Stores a map of (possible tile --(direction)--> number of neighbor edges allowing that tile) for every generation cell.
+  // Neighbor edges are deleted as we observe neighbor tiles + collapse neighbor states. When the number of neighbor
+  // edges compatible with a given tile reach zero for any direction, that tile is no longer possible for the
+  // generation cell.
+  private _compatible: (Map<TileID, Map<DirectionID, number>>)[]
+  // Number of possible tiles.
+  private _numTiles: number
+  // Length N of each NxN tile. All tiles in our tileset are size NxN, N>=1.
+  private _tileSize: number
+  // Map of tile IDs to tile data objects
+  private _tileSet: Map<number, TileData>
+
+  // WlogW for the given tile with weight W, 1 per tile
+  private _weightLogWeights: number[]
+  // prior probabilities of tiles, 1 per tile
+  private _weights: number[]
+  private _startingEntropy: number
+  // entropies of generation cells, 1 per cell
+  private _entropies: number[]
+
+  // Final observed tiles, 1 per generation cell.
+  // Only set after generation completes.
+  private _observed: TileID[]
+
+  // Stack of (cellIndex, tile) pairs banned during iterations, used for backtracking and propagation
+  private _stack: {cellIndex: number; tile: TileID}[]
+
+  // imageData - Pixels to use as source image
+  // width - Width (in tiles) of the generation
+  // height - Height (in tiles) of the generation
+  // tileSize - Length N of each NxN square forming the basic unit of the generation
+  // isPeriodic - Whether the source image is considered a periodic pattern
+  // basis - A Basis object providing the constraining edges for each cell.
+  constructor(imageData: ImageData, width: number, height: number, tileSize: number, isPeriodic: boolean, basis: Basis) {
+    this._FMX = width
+    this._FMY = height
+    this._FMXxFMY = width * height
+
+    this._tileSize = tileSize
+    this._isPeriodic = isPeriodic
+    this._basis = basis
+
+    // 1. Count number of unique colors in source image and assign each an ID
+    let nextColorID = 0
+    const hexToID = new Map<ColorHex, number>()
+    for (let i = 0; i < imageData.height; i++) {
+      for (let j = 0; j < imageData.width; j++) {
+        const r = imageData.data[i*4*imageData.width + j*4 + 0]
+        const g = imageData.data[i*4*imageData.width + j*4 + 1]
+        const b = imageData.data[i*4*imageData.width + j*4 + 2]
+        const a = imageData.data[i*4*imageData.width + j*4 + 3]
+        const hex = r | (g << 8) | (b << 16) | (a << 24)
+        if (!hexToID.has(hex)) {
+          hexToID.set(hex, nextColorID++)
+        }
+      }
+    }
+    const numColors = hexToID.size
+    // 2. Get all unique tiles in source image, assign each an ID, and
+    // construct a directed graph of unique tile IDs to possible neighbor
+    // tile IDs
+    const hexArrayToHash = (colorArr: ColorHex[]): number  => {
+      // "Hash" each array of C colors by treating each color as a digit and computing the number.
+      let result = 0
+      for (let i = 0; i < colorArr.length; i++) {
+        const hex = colorArr[colorArr.length - 1 - i]
+        result += hexToID.get(hex)! * Math.pow(numColors, i)
+      }
+      return result
+    }
+    const tileHexDataAtPixelOffset = (i: number, j: number): ColorHex[] => {
+      // Get a 1-dimensional array of NxN hex colors corresponding to the NxN tile at
+      // pixel offset i,j in the source image.
+      const data = new Array(this._tileSize * this._tileSize)
+      let index = 0
+      for (let di = 0; di < this._tileSize; di++) {
+        for (let dj = 0; dj < this._tileSize; dj++) {
+          const ii = i + di
+          const jj = j + dj
+          const r = imageData.data[ii*4*imageData.width + jj*4 + 0]
+          const g = imageData.data[ii*4*imageData.width + jj*4 + 1]
+          const b = imageData.data[ii*4*imageData.width + jj*4 + 2]
+          const a = imageData.data[ii*4*imageData.width + jj*4 + 3]
+          const hex = r | (g << 8) | (b << 16) | (a << 24)
+          data[index] = hex
+          index++
+        }
+      }
+      return data
+    }
+    const tileHexDataToTileData = (hexData: ColorHex[]): TileData => {
+      // TODO: We shouldn't need to do so much conversion between hex and RGBA format.
+      // Should be able to simplify this code a bunch if we make `_tileSet` use
+      // tile data with pixels in hex format.
+      return {
+        data: hexData.map<Color>(hex => {
+            return {
+            r: hex & 0xFF,
+            g: (hex >> 8) & 0xFF,
+            b: (hex >> 16) & 0xFF,
+            a: (hex >> 24) & 0xFF,
+          }
+        })
+      }
+    }
+    let nextTileID = 0
+    const tileHashToID = new Map<number, TileID>()
+    const tileIDToCount = new Map<TileID, number>()
+    this._tileSet = new Map()
+    this._propagator = new Map()
+
+    const getTileIDForHexData = (tileHexData: ColorHex[]): TileID => {
+      // If tile with the given hex data already exists, return its ID.
+      // Else insert it into tileset and give it a new tile ID.
+      const hash = hexArrayToHash(tileHexData)
+      if (!tileHashToID.has(hash)) {
+        const tileID = nextTileID++
+        tileHashToID.set(hash, tileID)
+        tileIDToCount.set(tileID, 0)
+        const tileData = tileHexDataToTileData(tileHexData)
+        this._tileSet.set(tileID, tileData)
+        this._propagator.set(tileID, new Map())
+      }
+      const tileID = tileHashToID.get(hash)!
+      return tileID
+    }
+
+    for (let i = 0; i < imageData.height; i += this._tileSize) {
+      for (let j = 0; j < imageData.width; j += this._tileSize) {
+        const tileHexData = tileHexDataAtPixelOffset(i, j)
+        const tileID = getTileIDForHexData(tileHexData)
+        const dirMap = this._propagator.get(tileID)!
+        for (let d = 0; d < this._basis.numDirections; d++) {
+          let ii = i + this._basis.vector(d)[1] * this._tileSize
+          let jj = j + this._basis.vector(d)[0] * this._tileSize
+          if (ii < 0 || ii >= imageData.height) {
+            if (this._isPeriodic) {
+              ii = (imageData.height + ii) % imageData.height
+            } else {
+              continue
+            }
+          }
+          if (jj < 0 || jj >= imageData.width) {
+            if (this._isPeriodic) {
+              jj = (imageData.width + jj) % imageData.width
+            } else {
+              continue
+            }
+          }
+          const nTileID = getTileIDForHexData(tileHexDataAtPixelOffset(ii, jj))
+          tileIDToCount.set(nTileID, tileIDToCount.get(nTileID)! + 1)
+
+          if (!dirMap.has(d)) {
+            dirMap.set(d, [])
+          }
+          const neighborTileIDs = dirMap.get(d)!
+          if (neighborTileIDs.indexOf(nTileID) === -1) {
+            neighborTileIDs.push(nTileID)
+          }
+        }
+      }
+    }
+
+    this._numTiles = this._tileSet.size
+    this._weights = []
+    for (let t = 0; t < this._numTiles; t++) {
+      const count = tileIDToCount.get(t)!
+      this._weights.push(count / this._FMXxFMY)
+    }
+  }
+
+  initialize() {
+    debugLog(`initializing wave`)
+    this._wave = new Array(this._FMXxFMY)
+    this._compatible = new Array(this._FMXxFMY)
+    for (let i = 0; i < this._FMXxFMY; i++) {
+      this._wave[i] = new Array(this._numTiles)
+      this._compatible[i] = new Map()
+      for (let t = 0; t < this._numTiles; t++) {
+        const dirCount: Map<DirectionID, number> = new Map()
+        for (let d = 0; d < this._basis.numDirections; d++) {
+          dirCount.set(d, 0)
+        }
+        this._compatible[i].set(t, dirCount)
+      }
+    }
+
+    this._startingEntropy = 0
+    this._weightLogWeights = new Array(this._numTiles)
+    for (let t = 0; t < this._numTiles; t++) {
+      this._weightLogWeights[t] = this._weights[t] * Math.log(this._weights[t])
+      this._startingEntropy -= this._weightLogWeights[t]
+    }
+
+    this._entropies = new Array(this._FMXxFMY)
+    this._stack = []
+    debugLog(`init done`, JSON.stringify(this))
+  }
+
+  putGeneratedData(array: Uint8ClampedArray) {
+    if (!this._generationComplete) {
+      console.error("Cannot putGeneratedData when generation incomplete")
+      return
+    }
+    const N = this._tileSize
+    for (let index = 0; index < this._FMXxFMY; index++) {
+      const tileID = this._observed[index]
+      const data = this._tileSet.get(tileID)!.data
+      const i = (index / this._FMX) | 0
+      const j = index % this._FMX
+      for (let ii = 0; ii < N; ii++) {
+        for (let jj = 0; jj < N; jj++) {
+          //  FMX tiles, or FMX*N pixels
+          //  -------------------------
+          //
+          //  N=4 pixels
+          //  ----
+          // |+---+---+---+---+---+---+        |
+          // ||   |   |   |   |   |   |        |
+          // ||   |   |   |   |   |   |        |
+          // ||   |   |   |   |   |   |        |
+          //  +---+---+---+---+---+---+        | -> i=2 tile heights, 2*N*FMX pixels in row major order
+          //  |   |   |   |   |   |   |        |
+          //  |   |   |   |   |   |   |        |
+          //  |   |   |   |   |   |   |        |
+          //  +---+---XXXX+---+---+---+ -------*
+          //  |   |   XXXX|   |   |   |
+          //  |   |   XXXX|   |   |   |
+          //  |   |   XXXX|   |   |   |
+          //  +---+---+---+---+---+---+
+          //          ^
+          //  --------*
+          //  j=2 tile widths, or 2*N pixels offset from 2*N*FMX pixels in row major order
+          const rgba = data[ii*N + jj]
+          array[4*(i*this._FMX*N*N + j*N + ii*this._FMX*N + jj) + 0] = rgba.r;
+          array[4*(i*this._FMX*N*N + j*N + ii*this._FMX*N + jj) + 1] = rgba.g;
+          array[4*(i*this._FMX*N*N + j*N + ii*this._FMX*N + jj) + 2] = rgba.b;
+          array[4*(i*this._FMX*N*N + j*N + ii*this._FMX*N + jj) + 3] = rgba.a;
+        }
+      }
+    }
+  }
+
+  // Execute a full new generation
+  // rng - Random number generator function
+  // Returns true iff generation succeeded.
+  generate(rng?: () => number): boolean {
+    if (!this._wave) {
+      this.initialize()
+    }
+    rng = rng || Math.random
+    debugLog(`[generate] clearing`)
+    this.clear()
+    let i = 0
+    while (true) {
+      debugLog(`[generate] iterate ${i}...`)
+      const result = this.iterate(rng)
+      if (result !== IterationResult.ONGOING) {
+        debugLog(`[generate] iterations completed with result ${IterationResult[result]}`)
+        return result === IterationResult.END_SUCCESS
+      }
+      i++
+    }
+  }
+
+  iterate(rng: () => number): IterationResult {
+    if (!this._wave) {
+      this.initialize()
+    }
+    debugLog(`[iterate] observe`)
+    const result = this._observe(rng)
+    if (result !== IterationResult.ONGOING) {
+      this._generationComplete = result === IterationResult.END_SUCCESS
+      return result
+    }
+    debugLog(`[iterate] propagate`)
+    this._propagate()
+    return IterationResult.ONGOING
+  }
+
+  isGenerationComplete(): boolean {
+    return this._generationComplete
+  }
+
+  clear() {
+    for (let i = 0; i < this._FMXxFMY; i++) {
+      for (let t = 0; t < this._numTiles; t++) {
+        this._wave![i][t] = true
+
+        // Re-initialize the constraint edge graph `_compatible`.
+        // Every cell in `_compatible` is reset to have all possible neighbor
+        // tiles in every direction.
+        const compatDirMap = this._compatible[i].get(t)! // Map of directionID -> refcount of incoming edges
+        for (let d = 0; d < this._basis.numDirections; d++) {
+          // TODO: original WFC implementation seems to do something different to initialize `compatible`?
+          for (let t2 = 0; t2 < this._numTiles; t2++) {
+            const t2DirMap = this._propagator.get(t2)! // Map of directionID -> [list of possible tiles]
+            t2DirMap.get(this._basis.opposite(d))?.forEach(tile => {
+              if (tile === t) {
+                const compatCount = compatDirMap.get(d)!
+                compatDirMap.set(d, compatCount + 1)
+              }
+            })
+          }
+        }
+      }
+
+      this._entropies[i] = this._startingEntropy
+    }
+    this._generationComplete = false
+    debugLog(`clear done`, JSON.stringify(this))
+  }
+
+  // Find cell with minimum non-zero entropy and collapse its wavefunction by setting it
+  // to a single tile. If no such cell exists, return IterationResult.END_SUCCESS.
+  // If we find a contradiction (a cell with no possible tiles), return IterationResult.END_FAILURE.
+  // Else return IterationResult.ONGOING.
+  private _observe(rng: () => number): IterationResult {
+    let min = Infinity
+    let argmin = -1
+
+    // 1. Find cell with minimum non-zero entropy
+    for (let i = 0; i < this._FMXxFMY; i++) {
+      if (this._onBoundary(i % this._FMX, i / this._FMX | 0)) {
+        continue
+      }
+
+      let numChoices = 0
+      this._wave![i].forEach((isPossible) => {
+        if (isPossible) {
+          numChoices++
+        }
+      })
+      if (numChoices === 0) {
+        debugLog("[observe] found cell with 0 choices")
+        return IterationResult.END_FAILURE
+      }
+
+      const entropy = this._entropies[i]
+      if (numChoices > 1 && entropy <= min) {
+        const noise = 1e-6 * rng()
+        if (entropy + noise < min) {
+          min = entropy + noise
+          argmin = i
+        }
+      }
+    }
+
+    if (argmin === -1) {
+      // No cell with non-zero entropy was found, which means
+      // all cells only have 1 possible choice. All states
+      // have been observed.
+      this._observed = new Array(this._FMXxFMY)
+
+      for (let i = 0; i < this._FMXxFMY; i++) {
+        for (let t = 0; t < this._numTiles; t++) {
+          if (this._wave![i][t]) {
+            this._observed[i] = t
+            break
+          }
+        }
+      }
+
+      return IterationResult.END_SUCCESS
+    }
+
+    // 2. Collapse minimum cell wave function by sampling a tile from its distribution
+    const distribution = new Array(this._numTiles)
+    for (let t = 0; t < this._numTiles; t++) {
+      distribution[t] = this._wave![argmin][t] ? this._weights[t] : 0
+    }
+
+    const tileIndex = sampleDiscrete(distribution, rng())
+    const w = this._wave![argmin]
+    for (let t = 0; t < this._numTiles; t++) {
+      if (w[t] !== (t === tileIndex)) {
+        this._ban(argmin, t)
+      }
+    }
+
+    return IterationResult.ONGOING
+  }
+
+  // Propagate constraints affected by the observed cell through the wave.
+  private _propagate() {
+    while (this._stack.length > 0) {
+      const e1 = this._stack.pop()!
+
+      const i1 = e1.cellIndex
+      const x1 = i1 % this._FMX
+      const y1 = (i1 / this._FMX) | 0
+
+      for (let d = 0; d < this._basis.numDirections; d++) {
+        const dx = this._basis.vector(d)[0]
+        const dy = this._basis.vector(d)[1]
+
+        let x2 = x1 + dx
+        let y2 = y1 + dy
+
+        if (this._onBoundary(x2, y2)) {
+          continue
+        }
+
+        // `_onBoundary` returns false for periodic functions,
+        // handle those here
+        if (x2 < 0) {
+          x2 += this._FMX
+        } else if (x2 >= this._FMX) {
+          x2 -= this._FMX
+        }
+        if (y2 < 0) {
+          y2 += this._FMY
+        } else if (y2 >= this._FMY) {
+          y2 -= this._FMY
+        }
+
+        // ban possible tiles for this neighbor that now have zero compatibilities
+        const i2 = x2 + y2 * this._FMX
+        const compatibleTiles = this._compatible[i2]
+        const targetTilesForDir = this._propagator.get(e1.tile)!.get(d)
+        targetTilesForDir?.forEach(t2 => {
+          const compatibleNeighborEdges = compatibleTiles.get(t2)!
+          const compatCount = compatibleNeighborEdges.get(d)!
+          compatibleNeighborEdges.set(d, compatCount - 1)
+          if (compatibleNeighborEdges.get(d)! <= 0) {
+            this._ban(i2, t2)
+          }
+        })
+      }
+    }
+  }
+
+  // Returns whether given x and y coordinates are on the boundary of generation.
+  private _onBoundary(x: number, y: number): boolean {
+    return !this._isPeriodic && (x < 0 || y < 0 || x >= this._FMX || y >= this._FMY)
+  }
+
+  // Removes tile with index `t` from the possible tiles for generation cell `i`.
+  private _ban(i: number, t: number) {
+    if (this._wave![i][t] === false) {
+      return
+    }
+    this._wave![i][t] = false
+    this._stack.push({cellIndex: i, tile: t})
+
+    // TODO: avoid C calls to `ban` resulting in C^2 computations
+    let entropy = 0
+    for (let t = 0; t < this._numTiles; t++) {
+      if (this._wave![i][t]) {
+        entropy -= this._weightLogWeights[i]
+      }
+    }
+    this._entropies[i] = entropy
+  }
+
+  // for debugging only
+  countPossibilities(): number {
+    let n = 0
+    if (!this._wave) {
+      return n
+    }
+    this._wave.forEach((choices) => {
+      choices.forEach((choice) => {
+        if (choice) {
+          n++
+        }
+      })
+    })
+    return n
+  }
+}
+
 // Sample an index from a discrete probability distribution.
 // `weights` are probability masses of each index, `r` is
 // a number between 0 and 1 (sampler)
