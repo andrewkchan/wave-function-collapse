@@ -1050,6 +1050,18 @@ export class NonOverlappingTileModel {
   }
 }
 
+// OverlappingTileModel
+//
+// This model interprets the input image as a set of possibly overlapping tiles
+// where each tile is a `tileWidth` x `tileWidth` square of pixels. Every pixel
+// in the input image provides the top-left corner of a tile.
+//
+// The output is constrained so that an output tile can only have a neighboring tile
+// in a given direction if there also exists the same tile with the same neighbor in
+// the same direction in the input image.
+//
+// `SimplePixelModel` can be interpreted as equivalent to a `NonOverlappingTileModel` with a
+// `tileWidth` of 1.
 export class OverlappingTileModel {
   private _generationComplete: boolean = false
 
@@ -1145,8 +1157,8 @@ export class OverlappingTileModel {
       let index = 0
       for (let di = 0; di < this._tileSize; di++) {
         for (let dj = 0; dj < this._tileSize; dj++) {
-          const ii = i + di
-          const jj = j + dj
+          const ii = (i + di) % imageData.height
+          const jj = (j + dj) % imageData.width
           const r = imageData.data[ii*4*imageData.width + jj*4 + 0]
           const g = imageData.data[ii*4*imageData.width + jj*4 + 1]
           const b = imageData.data[ii*4*imageData.width + jj*4 + 2]
@@ -1195,22 +1207,23 @@ export class OverlappingTileModel {
       return tileID
     }
 
-    for (let i = 0; i < imageData.height; i += this._tileSize) {
-      for (let j = 0; j < imageData.width; j += this._tileSize) {
+    for (let i = 0; i < imageData.height; i += 1) {
+      for (let j = 0; j < imageData.width; j += 1) {
         const tileHexData = tileHexDataAtPixelOffset(i, j)
         const tileID = getTileIDForHexData(tileHexData)
+        tileIDToCount.set(tileID, tileIDToCount.get(tileID)! + 1)
         const dirMap = this._propagator.get(tileID)!
         for (let d = 0; d < this._basis.numDirections; d++) {
           let ii = i + this._basis.vector(d)[1] * this._tileSize
           let jj = j + this._basis.vector(d)[0] * this._tileSize
-          if (ii < 0 || ii >= imageData.height) {
+          if (ii < 0 || ii + this._tileSize > imageData.height) {
             if (this._isPeriodic) {
               ii = (imageData.height + ii) % imageData.height
             } else {
               continue
             }
           }
-          if (jj < 0 || jj >= imageData.width) {
+          if (jj < 0 || jj + this._tileSize > imageData.width) {
             if (this._isPeriodic) {
               jj = (imageData.width + jj) % imageData.width
             } else {
@@ -1218,7 +1231,6 @@ export class OverlappingTileModel {
             }
           }
           const nTileID = getTileIDForHexData(tileHexDataAtPixelOffset(ii, jj))
-          tileIDToCount.set(nTileID, tileIDToCount.get(nTileID)! + 1)
 
           if (!dirMap.has(d)) {
             dirMap.set(d, [])
@@ -1235,7 +1247,7 @@ export class OverlappingTileModel {
     this._weights = []
     for (let t = 0; t < this._numTiles; t++) {
       const count = tileIDToCount.get(t)!
-      this._weights.push(count / this._FMXxFMY)
+      this._weights.push(count / (imageData.width * imageData.height))
     }
   }
 
@@ -1259,6 +1271,9 @@ export class OverlappingTileModel {
     this._weightLogWeights = new Array(this._numTiles)
     for (let t = 0; t < this._numTiles; t++) {
       this._weightLogWeights[t] = this._weights[t] * Math.log(this._weights[t])
+      if (isNaN(this._weightLogWeights[t])) {
+        throw new Error("Unexpected NaN")
+      }
       this._startingEntropy -= this._weightLogWeights[t]
     }
 
