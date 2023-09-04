@@ -652,8 +652,8 @@ export class NonOverlappingTileModel {
       let index = 0
       for (let di = 0; di < this._tileSize; di++) {
         for (let dj = 0; dj < this._tileSize; dj++) {
-          const ii = i + di
-          const jj = j + dj
+          const ii = (i + di) % imageData.height
+          const jj = (j + dj) % imageData.width
           const r = imageData.data[ii*4*imageData.width + jj*4 + 0]
           const g = imageData.data[ii*4*imageData.width + jj*4 + 1]
           const b = imageData.data[ii*4*imageData.width + jj*4 + 2]
@@ -706,18 +706,19 @@ export class NonOverlappingTileModel {
       for (let j = 0; j < imageData.width; j += this._tileSize) {
         const tileHexData = tileHexDataAtPixelOffset(i, j)
         const tileID = getTileIDForHexData(tileHexData)
+        tileIDToCount.set(tileID, tileIDToCount.get(tileID)! + 1)
         const dirMap = this._propagator.get(tileID)!
         for (let d = 0; d < this._basis.numDirections; d++) {
           let ii = i + this._basis.vector(d)[1] * this._tileSize
           let jj = j + this._basis.vector(d)[0] * this._tileSize
-          if (ii < 0 || ii >= imageData.height) {
+          if (ii < 0 || ii + this._tileSize > imageData.height) {
             if (this._isPeriodic) {
               ii = (imageData.height + ii) % imageData.height
             } else {
               continue
             }
           }
-          if (jj < 0 || jj >= imageData.width) {
+          if (jj < 0 || jj + this._tileSize > imageData.width) {
             if (this._isPeriodic) {
               jj = (imageData.width + jj) % imageData.width
             } else {
@@ -725,7 +726,6 @@ export class NonOverlappingTileModel {
             }
           }
           const nTileID = getTileIDForHexData(tileHexDataAtPixelOffset(ii, jj))
-          tileIDToCount.set(nTileID, tileIDToCount.get(nTileID)! + 1)
 
           if (!dirMap.has(d)) {
             dirMap.set(d, [])
@@ -766,6 +766,9 @@ export class NonOverlappingTileModel {
     this._weightLogWeights = new Array(this._numTiles)
     for (let t = 0; t < this._numTiles; t++) {
       this._weightLogWeights[t] = this._weights[t] * Math.log(this._weights[t])
+      if (isNaN(this._weightLogWeights[t])) {
+        throw new Error("Unexpected NaN")
+      }
       this._startingEntropy -= this._weightLogWeights[t]
     }
 
