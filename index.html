@@ -11,7 +11,7 @@
     <h1>Wave function collapse</h1>
     <p>
       An interactive demo of Maxim Gumin's wave function collapse algorithm for procedural bitmap generation.
-      Select a preset bitmap using the dropdown, upload one, or create your own.
+      Select a preset bitmap using the dropdown or upload your own.
     </p>
     <h2>Input</h2>
     <div>
@@ -91,9 +91,14 @@
       </div>
       <div class="output-control">
         <select id="output-control-model">
+          <option value="overlapping-tile-model">Overlapping tile model</option>
           <option value="non-overlapping-tile-model">Non-overlapping tile model</option>
           <option value="simple-pixel-model">Simple pixel model</option>
         </select>
+      </div>
+      <div class="output-control">
+        <label for="output-control-tile-size">Tilesize (1-4):</label>
+        <input type="number" id="output-control-tile-size" name="output-control-tile-size" min="1" max="4" value="2">
       </div>
       <div class="output-control">
         <select id="output-control-basis">

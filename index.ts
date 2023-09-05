@@ -1,9 +1,10 @@
-import { SimplePixelModel, CardinalBasis, CardinalBasisWithDiagonals, NonOverlappingTileModel } from "./model"
+import { SimplePixelModel, CardinalBasis, CardinalBasisWithDiagonals, NonOverlappingTileModel, OverlappingTileModel } from "./model"
 
 const inputCanvas = document.getElementById("input-canvas") as HTMLCanvasElement
 const outputPeriodic = document.getElementById("output-control-periodic") as HTMLInputElement
 const outputBasis = document.getElementById("output-control-basis") as HTMLSelectElement
 const outputModel = document.getElementById("output-control-model") as HTMLSelectElement
+const outputTileSize = document.getElementById("output-control-tile-size") as HTMLInputElement
 
 function generate() {
   const outputCanvas = document.getElementById("output-canvas") as HTMLCanvasElement
@@ -15,12 +16,19 @@ function generate() {
   const outputIsPeriodic = outputPeriodic.checked
 
   const modelBasis = outputBasisName === "cardinal" ? CardinalBasis : CardinalBasisWithDiagonals
-  const tileSize = 2
+  let tileSize = Number.parseInt(outputTileSize.value)
   let model: any = null
   if (outputModelName === "simple-pixel-model") {
     model = new SimplePixelModel(imageData, outputCanvas.width, outputCanvas.height, outputIsPeriodic, modelBasis)
+  } else if (outputModelName === "overlapping-tile-model") {
+    model = new OverlappingTileModel(imageData, Math.ceil(outputCanvas.width / tileSize), Math.ceil(outputCanvas.height / tileSize), tileSize, outputIsPeriodic, modelBasis)
   } else {
-    model = new NonOverlappingTileModel(imageData, outputCanvas.width / tileSize, outputCanvas.height / tileSize, tileSize, outputIsPeriodic, modelBasis)
+    // For the non-overlapping tile model, the input image dimensions must be divisible by the tile size.
+    // Round the tile size to the nearest smaller divisor.
+    while (inputCanvas.width % tileSize !== 0 || inputCanvas.height % tileSize !== 0) {
+      tileSize--
+    }
+    model = new NonOverlappingTileModel(imageData, Math.ceil(outputCanvas.width / tileSize), Math.ceil(outputCanvas.height / tileSize), tileSize, outputIsPeriodic, modelBasis)
   }
   let success = model.generate()
   const MAX_RETRIES = 10
@@ -77,5 +85,13 @@ inputSelect?.addEventListener("change", (e) => {
       const ctx = inputCanvas.getContext("2d")
       ctx?.drawImage(img, 0, 0)
     }
+  }
+})
+outputModel?.addEventListener("change", (e) => {
+  const value = (e?.target as any)?.value
+  if (value === 'overlapping-tile-model' || value === 'non-overlapping-tile-model') {
+    outputTileSize.disabled = false
+  } else {
+    outputTileSize.disabled = true
   }
 })
